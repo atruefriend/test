@@ -1,0 +1,170 @@
+using System;
+using System.Collections;
+using System.Collections.Generic;
+using System.Linq;
+using System.Reflection;
+using System.Xml.Linq;
+
+namespace NAVFAS.UIL
+{
+    public class Generator
+    {
+        /*
+         ----------Calling--------------
+                Generator gen = new Generator();
+                FundHeirarchy heirarchy = new FundHeirarchy();
+                gen.Context = heirarchy;
+                gen.Process();
+         */
+        public object Context { get; set; }
+        //Tuple<string, string> Item1 : Type; Item2 : Name
+        //Tuple<string, object, bool> Item1: Namw; Item2: Deatils; Item3: Is List, Item4 : Is Processable
+        List<Dictionary<Tuple<string, string>, Tuple<string, object, bool, bool>>> ProcessedItems = new List<Dictionary<Tuple<string, string>, Tuple<string, object, bool, bool>>>();
+        const BindingFlags bf =
+            BindingFlags.FlattenHierarchy |
+                BindingFlags.IgnoreCase |
+                BindingFlags.Instance |
+                BindingFlags.Public |
+                BindingFlags.Static |
+                BindingFlags.NonPublic;
+        public void Process()
+        {
+            Dictionary<Tuple<string, string, string>, Tuple<string, object, bool, bool>> items = new Dictionary<Tuple<string, string, string>, Tuple<string, object, bool, bool>>();
+
+            ProcessedItems.Add(new Dictionary<Tuple<string, string>, Tuple<string, object, bool, bool>>());
+            ProcessedItems.FirstOrDefault().Add(new Tuple<string, string>(Context.GetType().Name, Context.GetType().Name), new Tuple<string, object, bool, bool>(Context.GetType().Name, items, false, false));
+            ProcessList(Context, items);
+            var item = ProcessedItems.FirstOrDefault().FirstOrDefault();
+            int level = 0;
+            XElement result = GenerateXml(new Tuple<string, string, string>(item.Key.Item1, item.Key.Item2, item.Value.Item1), item.Value, new Dictionary<string, XElement>(), new string[] { "FundHeirarchy" }, ref level);
+        }
+
+
+        public XElement GenerateXml(Tuple<string, string, string> key, Tuple<string, object, bool, bool> value, Dictionary<string, XElement> processedItems, string[] eleminateRepeates, ref int level)
+        {
+            level++;
+            XElement outElm = new XElement(value.Item1);
+            outElm.Add(new XAttribute("name", value.Item1));
+            outElm.Add(new XAttribute("type", key.Item1));
+            outElm.Add(new XAttribute("isList", value.Item3));
+            outElm.Add(new XAttribute("isProcessable", value.Item4));
+
+            XElement inner;
+            if (value.Item2 != null)
+            {
+                if (!processedItems.ContainsKey(key.Item1))
+                {
+                    processedItems.Add(key.Item1, outElm);
+                    foreach (var x in (Dictionary<Tuple<string, string, string>, Tuple<string, object, bool, bool>>)value.Item2)
+                    {
+                        inner = GenerateXml(x.Key, x.Value, processedItems, eleminateRepeates, ref level);
+                        level--;
+                        outElm.Add(inner);
+                    }
+                }
+                else if (!eleminateRepeates.Any(x => x == key.Item1))
+                {
+                    if (level < 3)
+                        outElm.Add(processedItems[key.Item1].Elements());
+                    //{
+                    //    //XElement grandParent = parent.Parent;
+                    //    //if (grandParent != null)
+                    //    //{
+                    //    //    //if (grandParent.Element(key.Item1) == null)
+                    //    //    //    outElm.Add(processedItems[key.Item1].Elements());
+                    //    //}
+                    //    //else
+                    //    //    outElm.Add(processedItems[key.Item1].Elements());
+                    //}
+                    //else
+                    //    outElm.Add(processedItems[key.Item1].Elements());
+                }
+            }
+            return outElm;
+        }
+
+        public void ProcessList(object obj, Dictionary<Tuple<string, string, string>, Tuple<string, object, bool, bool>> items, bool isType = false)
+        {
+            if (obj == null)
+                return;
+
+            Type objType;
+            if (!isType)
+                objType = obj.GetType();
+            else
+                objType = (Type)obj;
+
+            PropertyInfo[] properties = objType.GetProperties(bf);
+
+            foreach (PropertyInfo prop in properties)
+            {
+                if (prop.PropertyType.IsPrimitive || prop.PropertyType == typeof(string) || prop.PropertyType == typeof(decimal) || prop.PropertyType == typeof(DateTime) || prop.PropertyType.IsEnum)
+                {
+                    items.Add(new Tuple<string, string, string>(prop.PropertyType.Name, prop.Name, prop.Name), new Tuple<string, object, bool, bool>(prop.Name, null, false, true));
+                }
+                else if (prop.PropertyType.IsGenericType && prop.PropertyType.GetGenericTypeDefinition() == typeof(Nullable<>))
+                {
+                    Type itemType = prop.PropertyType.GetGenericArguments()[0];
+                    items.Add(new Tuple<string, string, string>(itemType.Name, prop.Name, prop.Name), new Tuple<string, object, bool, bool>(prop.Name, null, false, true));
+                }
+                else if (typeof(IEnumerable).IsAssignableFrom(prop.PropertyType))
+                {
+                    if (prop.PropertyType.ToString().Equals("System.Byte[]"))
+                    {
+                        items.Add(new Tuple<string, string, string>(prop.PropertyType.ToString(), prop.Name, prop.Name), new Tuple<string, object, bool, bool>(prop.Name, null, true, true));
+                    }
+                    else
+                    {
+                        Type itemType = prop.PropertyType.GetGenericArguments()[0];
+                        if (itemType.IsPrimitive || prop.PropertyType == typeof(string) || prop.PropertyType == typeof(decimal) || prop.PropertyType == typeof(DateTime) || prop.PropertyType.IsEnum)
+                        {
+                            items.Add(new Tuple<string, string, string>(itemType.Name, prop.Name, prop.Name), new Tuple<string, object, bool, bool>(prop.Name, null, true, true));
+                        }
+                        else
+                        {
+                            if (!ProcessedItems.Any(x => x.ContainsKey(new Tuple<string, string>(itemType.Name, itemType.Name))))
+                            {
+                                Dictionary<Tuple<string, string, string>, Tuple<string, object, bool, bool>> item = new Dictionary<Tuple<string, string, string>, Tuple<string, object, bool, bool>>();
+                                items.Add(new Tuple<string, string, string>(itemType.Name, itemType.Name, prop.Name), new Tuple<string, object, bool, bool>(prop.Name, item, true, false));
+                                ProcessedItems.Add(new Dictionary<Tuple<string, string>, Tuple<string, object, bool, bool>>());
+                                ProcessedItems.LastOrDefault().Add(new Tuple<string, string>(itemType.Name, itemType.Name), new Tuple<string, object, bool, bool>(prop.Name, item, true, false));
+                                ProcessList(itemType, item, true);
+                            }
+                            else
+                            {
+                                var exisitngItem = ProcessedItems.FirstOrDefault(x => x.ContainsKey(new Tuple<string, string>(itemType.Name, itemType.Name))).FirstOrDefault();
+                                items.Add(new Tuple<string, string, string>(itemType.Name, itemType.Name, prop.Name), new Tuple<string, object, bool, bool>(prop.Name, exisitngItem.Value.Item2, true, exisitngItem.Value.Item4));
+                            }
+                        }
+                    }
+                }
+                else
+                {
+                    if (!ProcessedItems.Any(x => x.ContainsKey(new Tuple<string, string>(prop.PropertyType.Name, prop.PropertyType.Name))))
+                    {
+                        Dictionary<Tuple<string, string, string>, Tuple<string, object, bool, bool>> item = new Dictionary<Tuple<string, string, string>, Tuple<string, object, bool, bool>>();
+                        items.Add(new Tuple<string, string, string>(prop.PropertyType.Name, prop.PropertyType.Name, prop.Name), new Tuple<string, object, bool, bool>(prop.Name, item, false, false));
+                        ProcessedItems.Add(new Dictionary<Tuple<string, string>, Tuple<string, object, bool, bool>>());
+                        ProcessedItems.LastOrDefault().Add(new Tuple<string, string>(prop.PropertyType.Name, prop.PropertyType.Name), new Tuple<string, object, bool, bool>(prop.Name, item, false, false));
+                        if (prop.PropertyType.IsInterface)
+                            ProcessList(prop.PropertyType, item, true);
+                        else
+                            try
+                            {
+                                ProcessList(prop.GetValue(obj, null), item);
+                            }
+                            catch
+                            {
+                                ProcessList(prop.PropertyType, item, true);
+                            }
+                    }
+                    else
+                    {
+                        var exisitngItem = ProcessedItems.FirstOrDefault(x => x.ContainsKey(new Tuple<string, string>(prop.PropertyType.Name, prop.PropertyType.Name))).FirstOrDefault();
+                        items.Add(new Tuple<string, string, string>(prop.PropertyType.Name, prop.PropertyType.Name, prop.Name), new Tuple<string, object, bool, bool>(prop.Name, exisitngItem.Value.Item2, false, exisitngItem.Value.Item4));
+                    }
+                }
+            }
+        }
+    }
+}
